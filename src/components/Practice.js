@@ -1,6 +1,9 @@
+// src/components/Practice.js
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "react-hot-toast";
-import { API_BASE, LS, SURVEY } from "../App";
+import { API_BASE, LS } from "../App";
+
+import questionItems from "../data/questionBank.json";
 
 /* ------------------------------ Constants ------------------------------ */
 const FALLBACK_QUESTIONS = [
@@ -8,9 +11,7 @@ const FALLBACK_QUESTIONS = [
     "Describe your favorite place at home and how you usually spend time there.",
     "Talk about a hobby you picked up recently and how you got into it.",
 ];
-const TTS_VOICE = "shimmer";
 
-/* ------------------------------ Helpers ------------------------------ */
 const getRandomFallback = () =>
     FALLBACK_QUESTIONS[Math.floor(Math.random() * FALLBACK_QUESTIONS.length)];
 
@@ -29,6 +30,28 @@ const guessExtFromMime = (mt) => {
     return "webm";
 };
 
+/* ---------------------- 질문 필터: 레벨 / 역할 / 거주 ---------------------- */
+const matchesProfile = (q, { level, role, residence }) => {
+    const levelOk =
+        !q.levels || q.levels.length === 0 || !level || q.levels.includes(level);
+
+    const roleOk =
+        !q.roles ||
+        q.roles.length === 0 ||
+        !role ||
+        q.roles.includes(role) ||
+        q.roles.includes("ANY");
+
+    const residenceOk =
+        !q.residences ||
+        q.residences.length === 0 ||
+        !residence ||
+        q.residences.includes(residence) ||
+        q.residences.includes("ANY");
+
+    return levelOk && roleOk && residenceOk;
+};
+
 /* =============================== Component =============================== */
 function Practice({ setUi, setLoading, setLoadingText, setSavedHistory }) {
     const [question, setQuestion] = useState("Loading your first question...");
@@ -42,124 +65,105 @@ function Practice({ setUi, setLoading, setLoadingText, setSavedHistory }) {
     const [isRecording, setIsRecording] = useState(false);
     const [audioURL, setAudioURL] = useState("");
 
-    const [questionBank, setQuestionBank] = useState([]);
-    const [bankLoading, setBankLoading] = useState(false);
-
+    const [videoSrc, setVideoSrc] = useState(`${API_BASE}/video/intro_01`);
     const [needVideoGesture, setNeedVideoGesture] = useState(false);
 
+    // 👉 다시 듣기: 처음엔 false, 영상 1회 끝난 뒤 true, 다시 듣기 1번 누르면 다시 false
+    const [allowReplayOnce, setAllowReplayOnce] = useState(false);
+    const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+
+    // OPIc 리뷰 관련
+    const [currentQuestionId, setCurrentQuestionId] = useState(null);
+    const [review, setReview] = useState(null);
+    const [showReviewModal, setShowReviewModal] = useState(false);
+
     const videoRef = useRef(null);
-    const audioRef = useRef(null);
-    const pendingAudioUrlRef = useRef(null);
     const isInitialLoad = useRef(true);
 
-    /* ------------------------------ AV 동시 재생 (싱크 보정) ------------------------------ */
-    const playAudioAndVideo = useCallback(async (audioUrl) => {
-        const audio = audioRef.current;
-        const video = videoRef.current;
-        if (!audio || !video) return;
+    /* ---------------------- 질문은행에서 질문 선택 로직 ---------------------- */
+    const pickQuestionFromBank = useCallback((isInitial = false) => {
+        const selectedTopics = JSON.parse(localStorage.getItem(LS.topics) || "[]");
 
-        setNeedVideoGesture(false);
+        const userLevel = localStorage.getItem(LS.level) || "";
+        const userRole = localStorage.getItem(LS.role) || "";
+        const userResidence = localStorage.getItem(LS.residence) || "";
+        const profile = { level: userLevel, role: userRole, residence: userResidence };
 
-        audio.src = audioUrl;
-        audio.preload = "auto";
-        audio.load();
+        let baseCandidates = questionItems;
 
-        const ensureVideoReady = () =>
-            new Promise((resolve) => {
-                if (video.readyState >= 1) {
-                    video.currentTime = 0;
-                    resolve();
-                } else {
-                    video.addEventListener(
-                        "loadedmetadata",
-                        () => {
-                            video.currentTime = 0;
-                            resolve();
-                        },
-                        { once: true }
-                    );
-                }
-            });
-
-        const startSynced = async () => {
-            await ensureVideoReady();
-
-            const onAudioPlaying = async () => {
-                audio.removeEventListener("playing", onAudioPlaying);
-                video.currentTime = 0;
-                try {
-                    await video.play();
-                } catch (e) {
-                    console.warn("Video play blocked:", e);
-                    setNeedVideoGesture(true);
-                }
-            };
-            audio.addEventListener("playing", onAudioPlaying);
-
-            try {
-                await audio.play();
-            } catch (err) {
-                pendingAudioUrlRef.current = audioUrl;
-                setNeedVideoGesture(true);
+        if (isInitial) {
+            const introOrSurvey = questionItems.filter(
+                (q) => q.type === "survey" || q.topic === "intro"
+            );
+            if (introOrSurvey.length > 0) {
+                baseCandidates = introOrSurvey;
             }
-        };
+        } else {
+            baseCandidates = questionItems.filter(
+                (q) => q.type === "topic" || q.type === "advanced" || q.type === "intro"
+            );
+        }
 
-        await startSynced();
+        let candidates = baseCandidates;
+        if (selectedTopics.length > 0) {
+            const filteredByTopic = baseCandidates.filter((q) =>
+                selectedTopics.includes(q.topic)
+            );
+            if (filteredByTopic.length > 0) {
+                candidates = filteredByTopic;
+            }
+        }
 
-        // 오디오가 끝나면 타이머 시작 + 비디오 정지
-        audio.onended = () => {
-            video.pause();
-            setTimeLeft(60);
-            setTimerRunning(true);
-        };
+        const filteredByProfile = candidates.filter((q) =>
+            matchesProfile(q, profile)
+        );
+        if (filteredByProfile.length > 0) {
+            candidates = filteredByProfile;
+        }
+
+        if (!candidates.length) return null;
+        const idx = Math.floor(Math.random() * candidates.length);
+        return candidates[idx];
     }, []);
 
-    /* -------------------------- 질문 배치 프리페치 --------------------------- */
-    const fetchQuestionBatch = useCallback(async () => {
-        setBankLoading(true);
+    /* ------------------------------ 영상 재생 로직 ------------------------------ */
+    const startVideoPlay = useCallback(() => {
+        const videoEl = videoRef.current;
+        if (!videoEl) return;
+
+        setNeedVideoGesture(false);
+        videoEl.currentTime = 0;
+
         try {
-            const level = localStorage.getItem(LS.level) || "IH–AL";
-            const role = localStorage.getItem(LS.role) || "";
-            const residence = localStorage.getItem(LS.residence) || "";
-            const recentCourse = localStorage.getItem(LS.recentCourse) || "";
-            const selectedTopics = JSON.parse(localStorage.getItem(LS.topics) || "[]");
-
-            const topicLabels =
-                (SURVEY.topics || [])
-                    .filter((t) => selectedTopics.includes(t.key))
-                    .map((t) => t.label) || [];
-
-            const prompt = `
-You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview questions in English based on the user's profile.
-- Return ONLY a valid JSON array of strings. No extra text or commentary.
-- Each question: 14-22 words, single sentence, natural spoken style.
-- Base questions on these topics: ${topicLabels.length > 0 ? topicLabels.join(", ") : "General everyday topics"}.
-- Reference Profile: Level: ${level}, Role: ${role}, Residence: ${residence}, Course: ${recentCourse}.
-      `.trim();
-
-            const res = await fetch(`${API_BASE}/ask`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ question: prompt }),
-            });
-            if (!res.ok) throw new Error(`ask failed: ${res.status}`);
-            const data = await res.json();
-            const raw = data?.answer || "";
-            const match = raw.match(/\[.*\]/s);
-            let arr = match ? JSON.parse(match[0]) : [];
-            if (!Array.isArray(arr) || !arr.length) arr = FALLBACK_QUESTIONS;
-            setQuestionBank((prev) => [...prev, ...arr.filter(Boolean)]);
-        } catch (e) {
-            console.error("fetchQuestionBatch failed:", e);
-        } finally {
-            setBankLoading(false);
+            const playPromise = videoEl.play();
+            if (playPromise && typeof playPromise.then === "function") {
+                playPromise.catch((err) => {
+                    if (err.name === "NotAllowedError") {
+                        console.warn("Video autoplay blocked by browser:", err);
+                        setNeedVideoGesture(true);
+                    } else if (err.name === "AbortError") {
+                        console.log("Video play interrupted by new src (AbortError)");
+                    } else {
+                        console.warn("Video play error:", err);
+                    }
+                });
+            }
+        } catch (err) {
+            if (err.name === "NotAllowedError") {
+                console.warn("Video autoplay blocked by browser (sync):", err);
+                setNeedVideoGesture(true);
+            } else if (err.name === "AbortError") {
+                // ignore
+            } else {
+                console.warn("Video play error (sync):", err);
+            }
         }
     }, []);
 
     /* ------------------------------ 라운드 시작 ------------------------------ */
     const runOne = useCallback(
         async (isInitial = false) => {
-            setLoadingText("AI가 맞춤형 질문을 생성중입니다...");
+            setLoadingText("질문을 준비하는 중입니다...");
             if (!isInitial) setLoading(true);
 
             setTimeLeft(60);
@@ -168,51 +172,38 @@ You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview que
             setMemo("");
             setAudioURL("");
             setNeedVideoGesture(false);
+            setAllowReplayOnce(false);
+            setHasPlayedOnce(false);
+            setReview(null);
+            setShowReviewModal(false);
 
             try {
-                let nextQuestion;
-                if (isInitial) {
-                    nextQuestion = getRandomFallback();
-                    fetchQuestionBatch();
+                const next = pickQuestionFromBank(isInitial);
+                let nextText;
+                let nextVideoSrc = videoSrc;
+                let nextId = null;
+
+                if (!next) {
+                    nextText = getRandomFallback();
                 } else {
-                    if (questionBank.length > 0) {
-                        nextQuestion = questionBank[0];
-                        setQuestionBank((prev) => prev.slice(1));
-                        if (questionBank.length < 5 && !bankLoading) {
-                            fetchQuestionBatch();
-                        }
-                    } else {
-                        nextQuestion = getRandomFallback();
-                        if (!bankLoading) fetchQuestionBatch();
-                    }
+                    nextText = next.text;
+                    nextId = next.id;
+                    nextVideoSrc = `${API_BASE}/video/${next.id}`;
                 }
 
-                setQuestion(nextQuestion);
-
-                const res = await fetch(`${API_BASE}/tts`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ text: nextQuestion, voice: TTS_VOICE }),
-                });
-                if (!res.ok) throw new Error("TTS request failed");
-
-                let audioBlob = await res.blob();
-                if (!audioBlob.type || audioBlob.type === "application/octet-stream") {
-                    const ab = await audioBlob.arrayBuffer();
-                    audioBlob = new Blob([ab], { type: "audio/mpeg" });
-                }
-
-                const audioUrl = URL.createObjectURL(audioBlob);
-                await playAudioAndVideo(audioUrl);
+                setQuestion(nextText);
+                setCurrentQuestionId(nextId);
+                setVideoSrc(nextVideoSrc);
             } catch (e) {
                 console.error("runOne failed", e);
-                toast.error("질문을 생성하는 데 실패했습니다. Fallback 질문으로 시작합니다.");
-                setQuestion(getRandomFallback());
+                toast.error("질문을 불러오는 데 실패했어요. 기본 질문으로 다시 시도할게요.");
+                const fallback = getRandomFallback();
+                setQuestion(fallback);
             } finally {
                 if (!isInitial) setLoading(false);
             }
         },
-        [bankLoading, fetchQuestionBatch, playAudioAndVideo, questionBank, setLoading, setLoadingText]
+        [pickQuestionFromBank, setLoading, setLoadingText, videoSrc]
     );
 
     /* ------------------------------ 초기 1회 실행 ------------------------------ */
@@ -223,17 +214,14 @@ You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview que
         }
     }, [runOne]);
 
-    /* -------------------------------- 타이머 -------------------------------- */
+    /* ------------------------- videoSrc 바뀔 때마다 재생 시도 ------------------------- */
     useEffect(() => {
-        if (!timerRunning) return undefined;
-        if (timeLeft <= 0) {
-            setIsFinished(true);
-            setTimerRunning(false);
-            return undefined;
-        }
-        const id = setInterval(() => setTimeLeft((s) => s - 1), 1000);
-        return () => clearInterval(id);
-    }, [timerRunning, timeLeft]);
+        const v = videoRef.current;
+        if (!v || !videoSrc) return;
+
+        console.log("[video] auto-play for src:", videoSrc);
+        startVideoPlay();
+    }, [videoSrc, startVideoPlay]);
 
     /* ------------------------------ 녹음 컨트롤 ------------------------------ */
     const startRecording = useCallback(async () => {
@@ -248,7 +236,9 @@ You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview que
                     deviceId = pick.deviceId;
                     localStorage.setItem("OPIC_INPUT_DEVICE_ID", deviceId);
                 }
-            } catch { }
+            } catch {
+                // ignore
+            }
 
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -260,11 +250,7 @@ You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview que
                 },
             });
 
-            const candidates = [
-                "audio/webm;codecs=opus",
-                "audio/webm",
-                "audio/mp4",
-            ];
+            const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
             const mime =
                 candidates.find((mt) => window.MediaRecorder?.isTypeSupported(mt)) ||
                 "audio/webm";
@@ -290,115 +276,232 @@ You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview que
         }
     }, []);
 
-    const stopRecording = useCallback(() => {
-        if (!mediaRecorder) return;
-
-        mediaRecorder.onstop = async () => {
-            setLoadingText("음성을 텍스트로 변환 중입니다...");
-            setLoading(true);
-
-            const type = recMime || "audio/webm";
-            const parts = mediaRecorder.chunks || [];
-            if (!parts.length) {
-                setLoading(false);
-                toast.error("녹음이 너무 짧아서 인식하지 못했어요. 한 문장 이상 말해줘!");
-                return;
-            }
-            const audioBlob = new Blob(parts, { type });
-
-            if (audioBlob.size < 1024) {
-                setLoading(false);
-                toast.error("녹음 길이가 너무 짧아요. 다시 시도해주세요:)");
+    /* --------------------------- OPIc 답변 리뷰 호출 --------------------------- */
+    const handleReview = useCallback(
+        async (baseText, forceFresh = false) => {
+            if (review && !forceFresh && !baseText) {
+                setShowReviewModal(true);
                 return;
             }
 
-            setAudioURL(URL.createObjectURL(audioBlob));
+            const answerText = (baseText || memo || "").trim();
+            if (!answerText) {
+                toast.error("먼저 답변을 말하거나 적어줘!");
+                return;
+            }
+
+            const targetLevel = localStorage.getItem(LS.level) || "IM2–IH";
+            const questionText = question;
+            const questionId = currentQuestionId || "unknown";
+
             try {
-                const ext = guessExtFromMime(type);
-                const formData = new FormData();
-                formData.append("audio", audioBlob, `recording.${ext}`);
+                setLoadingText("AI가 답변을 분석 중입니다...");
+                setLoading(true);
 
-                const res = await fetch(`${API_BASE}/transcribe`, {
+                const res = await fetch(`${API_BASE}/review`, {
                     method: "POST",
-                    body: formData,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        questionId,
+                        questionText,
+                        answerText,
+                        targetLevel: targetLevel.startsWith("IL") ? "IM1" : "IM2",
+                    }),
                 });
-                if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
 
                 const data = await res.json();
-                if (data?.text) setMemo(data.text);
-                else toast.error("음성 인식 결과가 비어 있어요.");
+                if (!res.ok) {
+                    console.error("Review error", data);
+                    toast.error("리뷰 생성에 실패했어요.");
+                    return;
+                }
+
+                setReview(data);
+                setShowReviewModal(true);
             } catch (e) {
-                console.error("Transcription error:", e);
-                toast.error("음성 인식에 실패했어요. 네트워크/서버 상태를 확인해주세요!");
+                console.error("Review fetch error", e);
+                toast.error("리뷰 요청 중 오류가 발생했어요.");
             } finally {
                 setLoading(false);
             }
-        };
+        },
+        [review, memo, question, currentQuestionId, setLoading, setLoadingText]
+    );
 
-        mediaRecorder.stop();
-        setIsRecording(false);
-        setIsFinished(true);
-    }, [mediaRecorder, recMime, setLoading, setLoadingText]);
+    const stopRecording = useCallback(
+        () => {
+            if (!mediaRecorder) return;
 
-    /* --------------------------- 모범답안 생성 --------------------------- */
-    const fetchBestAnswerFromGPT = useCallback(async () => {
-        if (!question.trim()) {
-            toast.error("질문이 먼저 필요해요!");
+            mediaRecorder.onstop = async () => {
+                setLoadingText("음성을 텍스트로 변환 중입니다...");
+                setLoading(true);
+
+                const type = recMime || "audio/webm";
+                const parts = mediaRecorder.chunks || [];
+                if (!parts.length) {
+                    setLoading(false);
+                    toast.error("녹음이 너무 짧아서 인식하지 못했어요. 한 문장 이상 말해줘!");
+                    return;
+                }
+                const audioBlob = new Blob(parts, { type });
+
+                if (audioBlob.size < 1024) {
+                    setLoading(false);
+                    toast.error("녹음 길이가 너무 짧아요. 다시 시도해주세요:)");
+                    return;
+                }
+
+                setAudioURL(URL.createObjectURL(audioBlob));
+                try {
+                    const ext = guessExtFromMime(type);
+                    const formData = new FormData();
+                    formData.append("file", audioBlob, `recording.${ext}`);
+
+                    const res = await fetch(`${API_BASE}/stt`, {
+                        method: "POST",
+                        body: formData,
+                    });
+                    if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
+
+                    const data = await res.json();
+                    if (data?.text) {
+                        setMemo(data.text);
+                        await handleReview(data.text, true);
+                    } else {
+                        toast.error("음성 인식 결과가 비어 있어요.");
+                    }
+                } catch (e) {
+                    console.error("Transcription error", e);
+                    toast.error("음성 인식에 실패했어요. 네트워크/서버 상태를 확인해주세요!");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            mediaRecorder.stop();
+            setIsRecording(false);
+            setIsFinished(true);
+        },
+        [mediaRecorder, recMime, setLoading, setLoadingText, handleReview]
+    );
+
+    /* -------------------------------- 타이머 -------------------------------- */
+    useEffect(() => {
+        if (!timerRunning) return;
+
+        if (timeLeft <= 0) {
+            setTimerRunning(false);
+            setIsFinished(true);
+            setAllowReplayOnce(false);   // ⏰ 타이머 끝 → 다시 듣기 OFF
+
+            if (isRecording) {
+                stopRecording();
+            }
             return;
         }
-        setLoadingText("모범답안을 생성 중입니다...");
-        setLoading(true);
-        try {
-            const targetBand = localStorage.getItem(LS.level) || "IM2–IH";
-            const modelAnswerPrompt = `
+
+        const id = setInterval(() => {
+            setTimeLeft((s) => s - 1);
+        }, 1000);
+
+        return () => clearInterval(id);
+    }, [timerRunning, timeLeft, isRecording, stopRecording]);
+
+    /* --------------------------- 모범답안 생성 --------------------------- */
+    const fetchBestAnswerFromGPT = useCallback(
+        async () => {
+            if (!question.trim()) {
+                toast.error("질문이 먼저 필요해요!");
+                return;
+            }
+            setLoadingText("모범답안을 생성 중입니다...");
+            setLoading(true);
+            try {
+                const targetBand = localStorage.getItem(LS.level) || "IM2–IH";
+                const modelAnswerPrompt = `
 You are an OPIC rater and coach. Write a model answer in English for the prompt at ${targetBand} level.
 Constraints: 130–170 words, first-person, friendly spoken style, clear structure with examples.
 Prompt: ${question}
       `.trim();
 
-            const res = await fetch(`${API_BASE}/ask`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ question: modelAnswerPrompt }),
-            });
-            const data = await res.json();
-            const answer = (data?.answer || "").trim();
-            if (answer) {
-                setMemo((prev) => `${prev}\n\n\n➡️ AI 모범답안:\n\n${answer}`);
-            } else {
-                toast.error("모범답안 생성 실패");
+                const res = await fetch(`${API_BASE}/ask`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question: modelAnswerPrompt }),
+                });
+                const data = await res.json();
+                const answer = (data?.answer || "").trim();
+                if (answer) {
+                    setMemo((prev) => `${prev}\n\n\n➡️ AI 모범답안:\n\n${answer}`);
+                } else {
+                    toast.error("모범답안 생성 실패");
+                }
+            } finally {
+                setLoading(false);
             }
-        } finally {
-            setLoading(false);
-        }
-    }, [question, setLoading, setLoadingText]);
+        },
+        [question, setLoading, setLoadingText]
+    );
 
-    /* -------------------------------- 저장/리뷰 -------------------------------- */
-    const handleSave = useCallback(() => {
-        if (!memo.trim()) {
-            toast.error("📝 답변을 먼저 입력해주세요!");
-            return;
-        }
-        const saved = JSON.parse(localStorage.getItem(LS.history) || "[]");
-        const separator = "➡️ AI 모범답안:";
-        const newEntry = {
-            question,
-            memo: memo.split(separator)[0].trim(),
-            gptAnswer: memo.includes(separator) ? memo.split(separator)[1].trim() : "",
-        };
-        localStorage.setItem(LS.history, JSON.stringify([...saved, newEntry]));
-        toast.success("저장되었습니다!");
-    }, [memo, question]);
+    /* -------------------------------- 저장/리뷰 목록 -------------------------------- */
+    const handleSave = useCallback(
+        () => {
+            if (!memo.trim()) {
+                toast.error("📝 답변을 먼저 입력해주세요!");
+                return;
+            }
+            const saved = JSON.parse(localStorage.getItem(LS.history) || "[]");
+            const separator = "➡️ AI 모범답안:";
+            const newEntry = {
+                question,
+                memo: memo.split(separator)[0].trim(),
+                gptAnswer: memo.includes(separator)
+                    ? memo.split(separator)[1].trim()
+                    : "",
+            };
+            localStorage.setItem(LS.history, JSON.stringify([...saved, newEntry]));
+            toast.success("저장되었습니다!");
+        },
+        [memo, question]
+    );
 
-    const handleGoToReview = useCallback(() => {
-        const history = JSON.parse(localStorage.getItem(LS.history) || "[]");
-        if (history.length === 0) {
-            toast.error("저장된 질문이 없습니다.");
-            return;
-        }
-        setSavedHistory(history);
-        setUi("review");
-    }, [setSavedHistory, setUi]);
+    const handleGoToReviewList = useCallback(
+        () => {
+            const history = JSON.parse(localStorage.getItem(LS.history) || "[]");
+            if (history.length === 0) {
+                toast.error("저장된 질문이 없습니다.");
+                return;
+            }
+            setSavedHistory(history);
+            setUi("review");
+        },
+        [setSavedHistory, setUi]
+    );
+
+    /* --------------------------- 다시 듣기 (정확히 1번) --------------------------- */
+    const handleReplayOnce = useCallback(
+        () => {
+            if (!allowReplayOnce || isFinished) return;
+            const v = videoRef.current;
+            if (!v) return;
+            try {
+                v.currentTime = 0;
+                v.play();
+                setAllowReplayOnce(false);
+            } catch (e) {
+                console.warn("Replay failed", e);
+            }
+        },
+        [allowReplayOnce, isFinished]
+    );
+
+    /* ---- OPIc 레벨 한국어 설명 맵 ---- */
+    const levelLabelMap = {
+        IM1: "IM1 (초중급)",
+        IM2: "IM2 (중급)",
+        IH: "IH (중고급)",
+        AL: "AL (상급)",
+    };
 
     /* -------------------------------- Render -------------------------------- */
     return (
@@ -406,11 +509,13 @@ Prompt: ${question}
             <h2>{question}</h2>
             <h3>남은 시간: {timeLeft}초</h3>
 
-            <div style={{ position: "relative", width: 360, height: 360, marginTop: 16 }}>
+            <div
+                style={{ position: "relative", width: 360, height: 360, marginTop: 16 }}
+            >
                 <video
                     ref={videoRef}
-                    src="/avatar.mp4"
-                    muted
+                    src={videoSrc}
+                    muted={false}
                     playsInline
                     preload="auto"
                     style={{
@@ -422,8 +527,20 @@ Prompt: ${question}
                         objectFit: "cover",
                         background: "#000",
                     }}
+                    onEnded={() => {
+                        // 이미 이 문제는 끝난 상태라면 (타이머 0초 등) 아무 것도 안 함
+                        if (isFinished) return;
+
+                        // 처음 끝났을 때만: 타이머 시작 + 다시 듣기 1회 허용
+                        if (!hasPlayedOnce) {
+                            setHasPlayedOnce(true);
+                            setTimeLeft(60);
+                            setTimerRunning(true);
+                            setAllowReplayOnce(true);
+                        }
+                        // 두 번째(다시 듣기 후) 끝난 건 그냥 무시
+                    }}
                 />
-                <audio ref={audioRef} />
                 {needVideoGesture && (
                     <button
                         className="btn primary"
@@ -435,29 +552,29 @@ Prompt: ${question}
                             width: 220,
                             backdropFilter: "blur(2px)",
                         }}
-                        onClick={async () => {
-                            const url = pendingAudioUrlRef.current;
-                            if (url) await playAudioAndVideo(url);
-                        }}
+                        onClick={startVideoPlay}
                     >
                         ▶ 아바타 재생하기
                     </button>
                 )}
             </div>
 
+            {/* 다시 듣기: 질문 1회 재생 완료 후에만 활성화, 딱 1번만 */}
             <button
                 className="btn primary"
-                onClick={() => {
-                    const src = audioRef.current?.src;
-                    if (src) playAudioAndVideo(src);
-                }}
+                onClick={handleReplayOnce}
                 style={{ marginTop: 12 }}
+                disabled={!allowReplayOnce}
             >
-                ▶ 다시 듣기
+                <i className="fa-solid fa-rotate-right" aria-hidden="true" /> 다시 듣기 (1회)
             </button>
 
             {!isRecording ? (
-                <button onClick={startRecording} disabled={!timerRunning} style={{ marginTop: 16 }}>
+                <button
+                    onClick={startRecording}
+                    disabled={!timerRunning || isFinished}
+                    style={{ marginTop: 16 }}
+                >
                     <i className="fa-solid fa-microphone" aria-hidden="true" />{" "}
                     {timerRunning ? "답변 녹음 시작" : "질문 듣고 답변하세요"}
                 </button>
@@ -473,9 +590,8 @@ Prompt: ${question}
                 </div>
             )}
 
-            <button onClick={() => runOne(false)} disabled={bankLoading} style={{ marginTop: 16 }}>
-                <i className="fa-solid fa-shuffle" aria-hidden="true" />{" "}
-                {bankLoading ? "새 질문 로딩…" : "다른 질문 받기"}
+            <button onClick={() => runOne(false)} style={{ marginTop: 16 }}>
+                <i className="fa-solid fa-shuffle" aria-hidden="true" /> 다른 질문 받기
             </button>
 
             <div style={{ marginTop: 40, width: "100%", maxWidth: "600px" }}>
@@ -491,15 +607,34 @@ Prompt: ${question}
             {isFinished && (
                 <>
                     <button onClick={fetchBestAnswerFromGPT}>
-                        <i className="fa-solid fa-wand-magic" aria-hidden="true" /> 모범답안 요청하기
+                        <i className="fa-solid fa-wand-magic" aria-hidden="true" /> 모범답안
+                        요청하기
                     </button>
+
+                    <button onClick={() => handleReview()}>
+                        <i className="fa-solid fa-comments" aria-hidden="true" /> AI 답변 리뷰 보기
+                    </button>
+
                     <button onClick={handleSave}>
-                        <i className="fa-solid fa-floppy-disk" aria-hidden="true" /> 질문 + 메모 저장
+                        <i className="fa-solid fa-floppy-disk" aria-hidden="true" /> 질문 + 메모
+                        저장
                     </button>
-                    <button onClick={handleGoToReview}>
-                        <i className="fa-solid fa-folder-open" aria-hidden="true" /> 저장된 질문/답변 보기
+
+                    <button onClick={handleGoToReviewList}>
+                        <i className="fa-solid fa-folder-open" aria-hidden="true" /> 저장된
+                        질문/답변 보기
                     </button>
                 </>
+            )}
+
+            {review && (
+                <button
+                    type="button"
+                    className="review-toggle-btn"
+                    onClick={() => handleReview()}
+                >
+                    <i className="fa-solid fa-comment-dots" aria-hidden="true" /> 리뷰 다시 보기
+                </button>
             )}
 
             <div className="practice-actions">
@@ -509,9 +644,76 @@ Prompt: ${question}
                     onClick={() => setUi("survey")}
                     title="설문 다시하기"
                 >
-                    <i className="fa-solid fa-arrow-left icon-nudge" aria-hidden="true" /> 설문 다시하기
+                    <i className="fa-solid fa-arrow-left icon-nudge" aria-hidden="true" />{" "}
+                    설문 다시하기
                 </button>
             </div>
+
+            {showReviewModal && review && (
+                <div
+                    className="loading-overlay"
+                    onClick={() => setShowReviewModal(false)}
+                >
+                    <div
+                        className="question-block"
+                        style={{ maxWidth: 720, cursor: "auto" }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="review-header">
+                            <div className="review-header-left">
+                                <i
+                                    className="fa-solid fa-magnifying-glass-chart"
+                                    aria-hidden="true"
+                                />
+                                <h3>AI 답변 리뷰</h3>
+                            </div>
+                            <span className="latest-badge">최신</span>
+                            <button
+                                className="btn ghost"
+                                style={{ marginTop: 0 }}
+                                onClick={() => setShowReviewModal(false)}
+                            >
+                                ✕ 닫기
+                            </button>
+                        </div>
+                        <div className="review-content">
+                            <p>
+                                <strong>점수</strong>: {review.score ?? "-"} / 5{" "}
+                                {review.recommendedLevel &&
+                                    `(${levelLabelMap[review.recommendedLevel] || review.recommendedLevel})`}
+                            </p>
+                            {review.fluency && (
+                                <p>
+                                    <strong>유창성</strong>: {review.fluency}
+                                </p>
+                            )}
+                            {review.grammar && (
+                                <p>
+                                    <strong>문법</strong>: {review.grammar}
+                                </p>
+                            )}
+                            {review.vocab && (
+                                <p>
+                                    <strong>어휘</strong>: {review.vocab}
+                                </p>
+                            )}
+                            {review.taskAchievement && (
+                                <p>
+                                    <strong>내용 충실도</strong>: {review.taskAchievement}
+                                </p>
+                            )}
+                            {review.overallFeedback && (
+                                <div style={{ marginTop: 16 }}>
+                                    <strong>종합 피드백</strong>
+                                    <p style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                                        {review.overallFeedback}
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
