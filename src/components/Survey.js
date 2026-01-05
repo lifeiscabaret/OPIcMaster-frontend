@@ -1,7 +1,6 @@
 // src/components/Survey.js
 import { useState } from 'react';
 import { LS, SURVEY, API_BASE } from '../App'; // ✅ API_BASE 추가
-import { toast } from 'react-hot-toast';
 
 function Survey({ setUi }) {
     const [level, setLevel] = useState(localStorage.getItem(LS.level) || "IH–AL");
@@ -71,16 +70,9 @@ Preferred Topics: ${selectedTopicLabels.length
     /* ------------------- 기존 핸들러 유지(화면 전환) + 프리로드 추가 ------------------- */
 
     const handleStart = () => {
-        // ✅ 1) 토픽 최소 5개 체크
-        if (selectedTopics.length < 5) {
-            toast.error("연습을 시작하려면 최소 5개의 토픽을 선택해 주세요 🙂");
-            return;
-        }
-
-        // ✅ 2) 프리로드 (기다릴 필요 없음)
+        // 프리로드는 기다리지 않고 백그라운드에서 실행
         preloadQuestionsToLocalStorage();
-
-        // ✅ 3) Practice 화면으로 이동
+        // 바로 Practice 화면으로 전환 → 로딩 오버레이 즉시 노출
         setUi("practice");
     };
 

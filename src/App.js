@@ -1,23 +1,21 @@
-// src/App.js
 import { useEffect, useState } from "react";
 import "./App.css";
 import { Toaster } from "react-hot-toast";
 
+// 컴포넌트 임포트
 import Survey from "./components/Survey";
 import Practice from "./components/Practice";
 import Review from "./components/Review";
 import LoadingOverlay from "./components/LoadingOverlay";
 import ScrollButtons from "./components/ScrollButtons";
 
-/* ====================== 환경 ====================== */
-// 로컬 개발: http://localhost:8080
 export const API_BASE =
   process.env.REACT_APP_API_BASE_URL || "http://localhost:8080";
 
+// 프로덕션(API_BASE가 /api로 끝남)과 로컬(그렇지 않을 수 있음) 모두에서 동작하도록 헬스체크 URL 보정
 const HEALTH_URL =
   (API_BASE.endsWith("/api") ? API_BASE.slice(0, -4) : API_BASE) + "/health";
 
-/* =================== 로컬스토리지 키 =================== */
 export const LS = {
   level: "opic:level",
   role: "opic:role",
@@ -27,7 +25,6 @@ export const LS = {
   history: "opicHistory",
 };
 
-/* ====================== 설문 옵션 ====================== */
 export const SURVEY = {
   residenceOptions: [
     "개인 주택/아파트 단독 거주",
@@ -65,9 +62,8 @@ export const SURVEY = {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function App() {
-  const [ui, setUi] = useState("start"); // start | survey | practice | review
+  const [ui, setUi] = useState("start");
   const [serverReady, setServerReady] = useState(false);
-
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState(
     "AI가 맞춤형 질문을 생성중입니다..."
@@ -76,7 +72,7 @@ function App() {
   // Review 화면으로 전달할 상태
   const [savedHistory, setSavedHistory] = useState([]);
 
-  /* ── 백엔드 깨우기 ─────────────────────── */
+  /* ── Wake up backend server ─────────────────────── */
   const wakeBackend = async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -106,7 +102,6 @@ function App() {
     };
   }, []);
 
-  /* ── 화면 스위치 ─────────────────────── */
   const renderContent = () => {
     switch (ui) {
       case "survey":
@@ -147,16 +142,13 @@ function App() {
 
   return (
     <>
-      {/* 토스트 알림 */}
+      {/* Toast 알림을 위한 컨테이너 */}
       <Toaster position="top-center" reverseOrder={false} />
 
-      {/* 스크롤 업/다운 버튼 */}
       <ScrollButtons ui={ui} savedHistory={savedHistory} />
 
-      {/* 로딩 오버레이 */}
       {loading && <LoadingOverlay loadingText={loadingText} />}
 
-      {/* 서버 깨우는 동안 스타트 화면만 표시 */}
       {!serverReady && (
         <div className="start-screen">
           <h1 className="start-title">OPIC</h1>
@@ -164,7 +156,6 @@ function App() {
         </div>
       )}
 
-      {/* 서버 준비되면 실제 화면 렌더 */}
       {serverReady && renderContent()}
     </>
   );
