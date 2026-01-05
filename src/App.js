@@ -8,6 +8,7 @@ import Practice from "./components/Practice";
 import Review from "./components/Review";
 import LoadingOverlay from "./components/LoadingOverlay";
 import ScrollButtons from "./components/ScrollButtons";
+import Stats from "./components/Stats";
 
 /* ====================== 환경 ====================== */
 // 로컬 개발: http://localhost:8080
@@ -65,7 +66,7 @@ export const SURVEY = {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function App() {
-  const [ui, setUi] = useState("start"); // start | survey | practice | review
+  const [ui, setUi] = useState("start"); // start | survey | practice | review | stats
   const [serverReady, setServerReady] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -76,7 +77,7 @@ function App() {
   // Review 화면으로 전달할 상태
   const [savedHistory, setSavedHistory] = useState([]);
 
-  /* ── 백엔드 깨우기 ─────────────────────── */
+  /* ── 백엔드  ─────────────────────── */
   const wakeBackend = async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -111,6 +112,7 @@ function App() {
     switch (ui) {
       case "survey":
         return <Survey setUi={setUi} />;
+
       case "practice":
         return (
           <Practice
@@ -120,6 +122,7 @@ function App() {
             setSavedHistory={setSavedHistory}
           />
         );
+
       case "review":
         return (
           <Review
@@ -128,6 +131,10 @@ function App() {
             setSavedHistory={setSavedHistory}
           />
         );
+
+      case "stats":
+        return <Stats setUi={setUi} />;
+
       case "start":
       default:
         return (

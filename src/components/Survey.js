@@ -1,4 +1,3 @@
-// src/components/Survey.js
 import { useState } from 'react';
 import { LS, SURVEY, API_BASE } from '../App'; // ✅ API_BASE 추가
 import { toast } from 'react-hot-toast';
