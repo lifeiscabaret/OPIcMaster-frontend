@@ -679,16 +679,6 @@ Prompt: ${question}
                 </>
             )}
 
-            {review && (
-                <button
-                    type="button"
-                    className="review-toggle-btn"
-                    onClick={() => handleReview()}
-                >
-                    <i className="fa-solid fa-comment-dots" aria-hidden="true" /> 리뷰 다시 보기
-                </button>
-            )}
-
             <div className="practice-actions">
                 <button
                     type="button"
@@ -725,8 +715,16 @@ Prompt: ${question}
                             </div>
                             <span className="latest-badge">최신</span>
                             <button
-                                className="btn ghost"
-                                style={{ marginTop: 0 }}
+                                style={{
+                                    marginTop: 0,
+                                    background: "transparent",
+                                    border: "1px solid #94a3b8",
+                                    color: "#475569",
+                                    borderRadius: 8,
+                                    padding: "6px 14px",
+                                    fontSize: 14,
+                                    cursor: "pointer",
+                                }}
                                 onClick={() => setShowReviewModal(false)}
                             >
                                 ✕ 닫기
@@ -907,8 +905,16 @@ Prompt: ${question}
                                 <h3>이번에 저장된 질문 / 답변</h3>
                             </div>
                             <button
-                                className="btn ghost"
-                                style={{ marginTop: 0 }}
+                                style={{
+                                    marginTop: 0,
+                                    background: "transparent",
+                                    border: "1px solid #94a3b8",
+                                    color: "#475569",
+                                    borderRadius: 8,
+                                    padding: "6px 14px",
+                                    fontSize: 14,
+                                    cursor: "pointer",
+                                }}
                                 onClick={() => setShowLatestSavedModal(false)}
                             >
                                 ✕ 닫기

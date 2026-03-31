@@ -24,27 +24,34 @@ function formatDate(ts) {
     }
 }
 
-/**
- * props:
- *  - savedHistory: Practice에서 넘겨준 전체 history 배열
- *  - setUi: 화면 전환용 ("practice" 등)
- */
+const btnStyle = {
+    marginTop: 0,
+    background: "transparent",
+    border: "1px solid #94a3b8",
+    color: "#475569",
+    borderRadius: 8,
+    padding: "6px 14px",
+    fontSize: 14,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+};
+
 function Review({ savedHistory = [], setUi }) {
     const [page, setPage] = useState(1);
     const [openId, setOpenId] = useState(null);
+    const [sortBy, setSortBy] = useState("latest");
 
     const PAGE_SIZE = 10;
 
-    // ✅ 최신순 정렬(혹시라도 정렬이 안 되어 넘어온 경우 대비)
     const sorted = useMemo(() => {
         const cloned = [...savedHistory];
-        cloned.sort((a, b) => {
-            const aTime = a.createdAt || 0;
-            const bTime = b.createdAt || 0;
-            return bTime - aTime; // 최신순
-        });
+        if (sortBy === "score") {
+            cloned.sort((a, b) => (b.review?.score ?? 0) - (a.review?.score ?? 0));
+        } else {
+            cloned.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        }
         return cloned;
-    }, [savedHistory]);
+    }, [savedHistory, sortBy]);
 
     const total = sorted.length;
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -62,7 +69,7 @@ function Review({ savedHistory = [], setUi }) {
     const handleGoPage = (p) => {
         if (p < 1 || p > totalPages) return;
         setPage(p);
-        setOpenId(null); // 페이지 바뀔 때 펼친거 닫기
+        setOpenId(null);
     };
 
     return (
@@ -73,27 +80,40 @@ function Review({ savedHistory = [], setUi }) {
                     <h3>저장된 질문 / 답변 기록</h3>
                 </div>
 
-                {/* ✅ 우측 버튼 영역 */}
+                {/* 우측 버튼 영역 */}
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button
-                        className="btn ghost"
-                        style={{ marginTop: 0, whiteSpace: "nowrap" }}
-                        onClick={() => setUi("stats")}
-                        title="통계 / 약점 분석"
-                    >
+                    <button style={btnStyle} onClick={() => setUi("stats")}>
                         📊 통계 / 약점 분석
                     </button>
-
-                    <button
-                        className="btn ghost"
-                        style={{ marginTop: 0, whiteSpace: "nowrap" }}
-                        onClick={() => setUi("practice")}
-                    >
+                    <button style={btnStyle} onClick={() => setUi("practice")}>
                         ← 연습 화면으로 돌아가기
                     </button>
                 </div>
             </div>
 
+            {/* 정렬 필터 */}
+            <div style={{ display: "flex", gap: 8, margin: "12px 0 4px" }}>
+                {["latest", "score"].map((key) => (
+                    <button
+                        key={key}
+                        type="button"
+                        onClick={() => { setSortBy(key); setPage(1); }}
+                        style={{
+                            marginTop: 0,
+                            padding: "6px 14px",
+                            borderRadius: 20,
+                            fontSize: 13,
+                            cursor: "pointer",
+                            border: "1px solid #94a3b8",
+                            background: sortBy === key ? "#6366f1" : "transparent",
+                            color: sortBy === key ? "#fff" : "#fff",
+                            fontWeight: sortBy === key ? 600 : 400,
+                        }}
+                    >
+                        {key === "latest" ? "🕐 최신순" : "⭐ 높은 점수순"}
+                    </button>
+                ))}
+            </div>
 
             {total === 0 ? (
                 <p style={{ marginTop: 24 }}>아직 저장된 기록이 없어요. 먼저 연습을 진행해 주세요.</p>
@@ -109,14 +129,15 @@ function Review({ savedHistory = [], setUi }) {
 
                     <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
                         {currentPageItems.map((item, index) => {
-                            const itemId = item.id ?? `${item.createdAt}-${index}`; // ✅ 여기!
+                            const itemId = item.id ?? `${item.createdAt}-${index}`;
                             const isOpen = openId === itemId;
                             const review = item.review || {};
                             const idxLabel = (page - 1) * PAGE_SIZE + (index + 1);
+                            const isNew = item.createdAt && Date.now() - item.createdAt < 86400000;
 
                             return (
                                 <div
-                                    key={itemId} // ✅ 수정
+                                    key={itemId}
                                     className="question-block"
                                     style={{ cursor: "default" }}
                                 >
@@ -149,27 +170,39 @@ function Review({ savedHistory = [], setUi }) {
                                                         justifyContent: "center",
                                                         fontSize: 12,
                                                         fontWeight: 600,
+                                                        flexShrink: 0,
                                                     }}
                                                 >
                                                     {idxLabel}
                                                 </span>
                                                 <strong style={{ fontSize: 15 }}>
+                                                    {isNew && (
+                                                        <span style={{
+                                                            background: "#6366f1",
+                                                            color: "#fff",
+                                                            fontSize: 10,
+                                                            fontWeight: 700,
+                                                            padding: "2px 7px",
+                                                            borderRadius: 20,
+                                                            marginRight: 6,
+                                                            letterSpacing: 0.5,
+                                                            verticalAlign: "middle",
+                                                        }}>
+                                                            NEW
+                                                        </span>
+                                                    )}
                                                     {item.question || "(질문 없음)"}
                                                 </strong>
                                             </div>
                                             <div style={{ fontSize: 12, color: "#888" }}>
                                                 {formatDate(item.createdAt)}
                                                 {review.score != null && (
-                                                    <>
-                                                        {" · "}점수: {review.score}/5
-                                                    </>
+                                                    <>{" · "}점수: {review.score}/5</>
                                                 )}
                                                 {review.recommendedLevel && (
                                                     <>
-                                                        {" · "}
-                                                        레벨:{" "}
-                                                        {levelLabelMap[review.recommendedLevel] ||
-                                                            review.recommendedLevel}
+                                                        {" · "}레벨:{" "}
+                                                        {levelLabelMap[review.recommendedLevel] || review.recommendedLevel}
                                                     </>
                                                 )}
                                             </div>
@@ -177,9 +210,8 @@ function Review({ savedHistory = [], setUi }) {
 
                                         <button
                                             type="button"
-                                            className="btn ghost"
-                                            style={{ whiteSpace: "nowrap", marginTop: 0 }}
-                                            onClick={() => handleToggle(itemId)} // ✅ 수정
+                                            style={btnStyle}
+                                            onClick={() => handleToggle(itemId)}
                                         >
                                             {isOpen ? "접기 ▲" : "펼쳐보기 ▼"}
                                         </button>
@@ -196,13 +228,7 @@ function Review({ savedHistory = [], setUi }) {
                                         >
                                             <div>
                                                 <strong>📝 내가 쓴 답변</strong>
-                                                <p
-                                                    style={{
-                                                        marginTop: 8,
-                                                        whiteSpace: "pre-wrap",
-                                                        lineHeight: 1.6,
-                                                    }}
-                                                >
+                                                <p style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                                                     {item.memo || "(메모 없음)"}
                                                 </p>
                                             </div>
@@ -210,26 +236,14 @@ function Review({ savedHistory = [], setUi }) {
                                             {item.gptAnswer && (
                                                 <div style={{ marginTop: 16 }}>
                                                     <strong>✨ AI 모범답안</strong>
-                                                    <p
-                                                        style={{
-                                                            marginTop: 8,
-                                                            whiteSpace: "pre-wrap",
-                                                            lineHeight: 1.6,
-                                                        }}
-                                                    >
+                                                    <p style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                                                         {item.gptAnswer}
                                                     </p>
                                                 </div>
                                             )}
 
                                             {review && (review.overallFeedback || review.fluency) && (
-                                                <div
-                                                    style={{
-                                                        marginTop: 24,
-                                                        paddingTop: 16,
-                                                        borderTop: "1px solid #f1f1f1",
-                                                    }}
-                                                >
+                                                <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid #f1f1f1" }}>
                                                     <strong>📊 AI 리뷰</strong>
 
                                                     {review.fluency && (
@@ -238,28 +252,16 @@ function Review({ savedHistory = [], setUi }) {
                                                         </p>
                                                     )}
                                                     {review.grammar && (
-                                                        <p>
-                                                            <strong>문법</strong>: {review.grammar}
-                                                        </p>
+                                                        <p><strong>문법</strong>: {review.grammar}</p>
                                                     )}
                                                     {review.vocab && (
-                                                        <p>
-                                                            <strong>어휘</strong>: {review.vocab}
-                                                        </p>
+                                                        <p><strong>어휘</strong>: {review.vocab}</p>
                                                     )}
                                                     {review.taskAchievement && (
-                                                        <p>
-                                                            <strong>내용 충실도</strong>: {review.taskAchievement}
-                                                        </p>
+                                                        <p><strong>내용 충실도</strong>: {review.taskAchievement}</p>
                                                     )}
                                                     {review.overallFeedback && (
-                                                        <p
-                                                            style={{
-                                                                marginTop: 8,
-                                                                whiteSpace: "pre-wrap",
-                                                                lineHeight: 1.6,
-                                                            }}
-                                                        >
+                                                        <p style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                                                             {review.overallFeedback}
                                                         </p>
                                                     )}
@@ -267,13 +269,7 @@ function Review({ savedHistory = [], setUi }) {
                                                     {review.userAnswerOriginal && (
                                                         <div style={{ marginTop: 16 }}>
                                                             <strong>📌 내가 한 답변 (원문)</strong>
-                                                            <p
-                                                                style={{
-                                                                    marginTop: 8,
-                                                                    whiteSpace: "pre-wrap",
-                                                                    lineHeight: 1.6,
-                                                                }}
-                                                            >
+                                                            <p style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                                                                 {review.userAnswerOriginal}
                                                             </p>
                                                         </div>
@@ -282,13 +278,7 @@ function Review({ savedHistory = [], setUi }) {
                                                     {review.correctedAnswerExample && (
                                                         <div style={{ marginTop: 16 }}>
                                                             <strong>✏️ 교정된 영어 답변 예시</strong>
-                                                            <p
-                                                                style={{
-                                                                    marginTop: 8,
-                                                                    whiteSpace: "pre-wrap",
-                                                                    lineHeight: 1.6,
-                                                                }}
-                                                            >
+                                                            <p style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                                                                 {review.correctedAnswerExample}
                                                             </p>
                                                         </div>
@@ -297,13 +287,7 @@ function Review({ savedHistory = [], setUi }) {
                                                     {review.correctionTips && (
                                                         <div style={{ marginTop: 16 }}>
                                                             <strong>🛠️ 수정하면 좋은 포인트</strong>
-                                                            <p
-                                                                style={{
-                                                                    marginTop: 8,
-                                                                    whiteSpace: "pre-wrap",
-                                                                    lineHeight: 1.6,
-                                                                }}
-                                                            >
+                                                            <p style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
                                                                 {review.correctionTips}
                                                             </p>
                                                         </div>
@@ -317,7 +301,7 @@ function Review({ savedHistory = [], setUi }) {
                         })}
                     </div>
 
-                    {/* 🔢 페이지네이션 */}
+                    {/* 페이지네이션 */}
                     <div
                         style={{
                             marginTop: 24,
@@ -329,8 +313,7 @@ function Review({ savedHistory = [], setUi }) {
                     >
                         <button
                             type="button"
-                            className="btn ghost"
-                            style={{ marginTop: 0 }}
+                            style={btnStyle}
                             onClick={() => handleGoPage(page - 1)}
                             disabled={page === 1}
                         >
@@ -341,12 +324,17 @@ function Review({ savedHistory = [], setUi }) {
                             <button
                                 key={p}
                                 type="button"
-                                className="btn ghost"
                                 style={{
                                     marginTop: 0,
                                     minWidth: 32,
+                                    padding: "6px 10px",
+                                    borderRadius: 8,
+                                    fontSize: 14,
+                                    cursor: "pointer",
+                                    border: "1px solid #94a3b8",
+                                    background: p === page ? "#6366f1" : "transparent",
+                                    color: p === page ? "#fff" : "#475569",
                                     fontWeight: p === page ? 700 : 400,
-                                    background: p === page ? "#e5e7ff" : "transparent",
                                 }}
                                 onClick={() => handleGoPage(p)}
                                 disabled={p === page}
@@ -357,8 +345,7 @@ function Review({ savedHistory = [], setUi }) {
 
                         <button
                             type="button"
-                            className="btn ghost"
-                            style={{ marginTop: 0 }}
+                            style={btnStyle}
                             onClick={() => handleGoPage(page + 1)}
                             disabled={page === totalPages}
                         >

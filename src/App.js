@@ -10,15 +10,14 @@ import LoadingOverlay from "./components/LoadingOverlay";
 import ScrollButtons from "./components/ScrollButtons";
 import Stats from "./components/Stats";
 
-/* ====================== 환경 ====================== */
-// 로컬 개발: http://localhost:8080
+/*환경*/
 export const API_BASE =
   process.env.REACT_APP_API_BASE_URL || "http://localhost:8080";
 
 const HEALTH_URL =
   (API_BASE.endsWith("/api") ? API_BASE.slice(0, -4) : API_BASE) + "/health";
 
-/* =================== 로컬스토리지 키 =================== */
+/*로컬스토리지 키*/
 export const LS = {
   level: "opic:level",
   role: "opic:role",
@@ -28,7 +27,7 @@ export const LS = {
   history: "opicHistory",
 };
 
-/* ====================== 설문 옵션 ====================== */
+/* 설문 옵션 */
 export const SURVEY = {
   residenceOptions: [
     "개인 주택/아파트 단독 거주",
@@ -107,7 +106,7 @@ function App() {
     };
   }, []);
 
-  /* ── 화면 스위치 ─────────────────────── */
+  /* 화면 스위치*/
   const renderContent = () => {
     switch (ui) {
       case "survey":
