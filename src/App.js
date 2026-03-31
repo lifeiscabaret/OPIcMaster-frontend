@@ -8,7 +8,9 @@ import Practice from "./components/Practice";
 import Review from "./components/Review";
 import LoadingOverlay from "./components/LoadingOverlay";
 import ScrollButtons from "./components/ScrollButtons";
+import Stats from "./components/Stats";
 
+/*환경*/
 export const API_BASE =
   process.env.REACT_APP_API_BASE_URL || "http://localhost:8080";
 
@@ -16,6 +18,7 @@ export const API_BASE =
 const HEALTH_URL =
   (API_BASE.endsWith("/api") ? API_BASE.slice(0, -4) : API_BASE) + "/health";
 
+/*로컬스토리지 키*/
 export const LS = {
   level: "opic:level",
   role: "opic:role",
@@ -25,6 +28,7 @@ export const LS = {
   history: "opicHistory",
 };
 
+/* 설문 옵션 */
 export const SURVEY = {
   residenceOptions: [
     "개인 주택/아파트 단독 거주",
@@ -62,7 +66,7 @@ export const SURVEY = {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function App() {
-  const [ui, setUi] = useState("start");
+  const [ui, setUi] = useState("start"); // start | survey | practice | review | stats
   const [serverReady, setServerReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState(
@@ -72,7 +76,7 @@ function App() {
   // Review 화면으로 전달할 상태
   const [savedHistory, setSavedHistory] = useState([]);
 
-  /* ── Wake up backend server ─────────────────────── */
+  /* ── 백엔드  ─────────────────────── */
   const wakeBackend = async () => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -102,10 +106,12 @@ function App() {
     };
   }, []);
 
+  /* 화면 스위치*/
   const renderContent = () => {
     switch (ui) {
       case "survey":
         return <Survey setUi={setUi} />;
+
       case "practice":
         return (
           <Practice
@@ -115,6 +121,7 @@ function App() {
             setSavedHistory={setSavedHistory}
           />
         );
+
       case "review":
         return (
           <Review
@@ -123,6 +130,10 @@ function App() {
             setSavedHistory={setSavedHistory}
           />
         );
+
+      case "stats":
+        return <Stats setUi={setUi} />;
+
       case "start":
       default:
         return (

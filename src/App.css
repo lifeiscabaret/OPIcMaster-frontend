@@ -402,6 +402,17 @@ button.btn-reset:hover {
   justify-content: center;
   z-index: 999;
 }
+.review-overlay {
+  position: fixed;
+  inset: 0;
+  backdrop-filter: blur(6px);
+  /* loading-overlay랑 거의 동일하게 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 900; /* 🔹 전역 로딩(1000)보다 살짝 낮게 */
+}
+
 
 .loading-logo-reveal h1 {
   font-size: 54px;

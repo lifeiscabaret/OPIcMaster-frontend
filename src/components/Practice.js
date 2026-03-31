@@ -23,8 +23,24 @@ function Practice({ setUi, setLoading, setLoadingText, setSavedHistory }) {
     const [recMime, setRecMime] = useState("audio/webm");
     const [isRecording, setIsRecording] = useState(false);
     const [audioURL, setAudioURL] = useState("");
-    const [questionBank, setQuestionBank] = useState([]);
-    const [bankLoading, setBankLoading] = useState(false);
+
+    const [videoSrc, setVideoSrc] = useState(`${API_BASE}/video/intro_01`);
+    const [needVideoGesture, setNeedVideoGesture] = useState(false);
+
+    // 다시 듣기: 처음엔 false, 영상 1회 끝난 뒤 true, 다시 듣기 1번 누르면 다시 false
+    const [allowReplayOnce, setAllowReplayOnce] = useState(false);
+    const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+
+    // OPIc 리뷰 관련
+    const [currentQuestionId, setCurrentQuestionId] = useState(null);
+    const [review, setReview] = useState(null);
+    const [showReviewModal, setShowReviewModal] = useState(false);
+    const [bestAnswer, setBestAnswer] = useState("");
+    const [bestAnswerLoading, setBestAnswerLoading] = useState(false);
+
+    // “방금 저장한 항목” 단일 상세 뷰용
+    const [latestSavedEntry, setLatestSavedEntry] = useState(null);
+    const [showLatestSavedModal, setShowLatestSavedModal] = useState(false);
 
     const videoRef = useRef(null);
     const audioRef = useRef(null);
@@ -130,6 +146,11 @@ You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview que
             setMemo("");
             setAudioURL("");
             setNeedVideoGesture(false);
+            setAllowReplayOnce(false);
+            setHasPlayedOnce(false);
+            setReview(null);
+            setShowReviewModal(false);
+            setBestAnswer("");
 
             try {
                 let nextQuestion;
@@ -255,33 +276,207 @@ You are an expert OPIC coach. Generate 20 personalized, OPIC-style interview que
         setIsFinished(true);
     }, [mediaRecorder, recMime, setLoading, setLoadingText]);
 
-    /* --------------------------- 모범답안 생성 --------------------------- */
-    const fetchBestAnswerFromGPT = useCallback(async () => {
-        if (!question.trim()) {
-            toast.error("질문이 먼저 필요해요!");
+                if (audioBlob.size < 1024) {
+                    setLoading(false);
+                    toast.error("녹음 길이가 너무 짧아요. 다시 시도해주세요:)");
+                    return;
+                }
+
+                setAudioURL(URL.createObjectURL(audioBlob));
+                try {
+                    const ext = guessExtFromMime(type);
+                    const formData = new FormData();
+                    formData.append("file", audioBlob, `recording.${ext}`);
+
+                    const res = await fetch(`${API_BASE}/stt`, {
+                        method: "POST",
+                        body: formData,
+                    });
+                    if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
+
+                    const data = await res.json();
+                    if (data?.text) {
+                        setMemo(data.text);
+                        await handleReview(data.text, true);
+                    } else {
+                        toast.error("음성 인식 결과가 비어 있어요.");
+                    }
+                } catch (e) {
+                    console.error("Transcription error", e);
+                    toast.error("음성 인식에 실패했어요. 네트워크/서버 상태를 확인해주세요!");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            mediaRecorder.stop();
+            setIsRecording(false);
+            setIsFinished(true);
+        },
+        [mediaRecorder, recMime, setLoading, setLoadingText, handleReview]
+    );
+
+    /* -------------------------------- 타이머 -------------------------------- */
+    useEffect(() => {
+        if (!timerRunning) return;
+
+        if (timeLeft <= 0) {
+            setTimerRunning(false);
+            setIsFinished(true);
+            setAllowReplayOnce(false); // ⏰ 타이머 끝 → 다시 듣기 OFF
+
+            if (isRecording) {
+                stopRecording();
+            }
             return;
         }
-        setLoadingText("모범답안을 생성 중입니다...");
-        setLoading(true);
-        try {
-            const targetBand = localStorage.getItem(LS.level) || "IM2–IH";
-            const modelAnswerPrompt = `
+
+        const id = setInterval(() => {
+            setTimeLeft((s) => s - 1);
+        }, 1000);
+
+        return () => clearInterval(id);
+    }, [timerRunning, timeLeft, isRecording, stopRecording]);
+
+    /* --------------------------- 모범답안 생성 --------------------------- */
+    const fetchBestAnswerFromGPT = useCallback(
+        async () => {
+            if (!question.trim()) {
+                toast.error("질문이 먼저 필요해요!");
+                return;
+            }
+
+            // 🔹 전역 풀스크린 로딩 + 모범답안 전용 로딩 둘 다 켜기
+            setLoadingText("AI 모범답안을 생성 중입니다...");
+            setLoading(true);
+            setBestAnswerLoading(true);
+
+            try {
+                const targetBand = localStorage.getItem(LS.level) || "IM2–IH";
+                const modelAnswerPrompt = `
 You are an OPIC rater and coach. Write a model answer in English for the prompt at ${targetBand} level.
 Constraints: 130–170 words, first-person, friendly spoken style, clear structure with examples.
 Prompt: ${question}
       `.trim();
 
-            const res = await fetch(`${API_BASE}/ask`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ question: modelAnswerPrompt }),
+                const res = await fetch(`${API_BASE}/ask`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question: modelAnswerPrompt }),
+                });
+
+                const data = await res.json();
+                const answer = (data?.answer || "").trim();
+
+                if (answer) {
+                    setBestAnswer(answer);
+
+                    setMemo((prev) =>
+                        prev.includes("➡️ AI 모범답안:")
+                            ? prev
+                            : `${prev}\n\n\n➡️ AI 모범답안:\n\n${answer}`
+                    );
+                } else {
+                    toast.error("모범답안 생성 실패");
+                }
+            } catch (e) {
+                console.error("best answer error", e);
+                toast.error("모범답안 생성 중 오류가 발생했어요.");
+            } finally {
+                setBestAnswerLoading(false);
+                setLoading(false);
+            }
+        },
+        [question, setLoading, setLoadingText]
+    );
+
+    /* -------------------------------- 저장/리뷰 목록 -------------------------------- */
+    const handleSave = useCallback(
+        () => {
+            if (!memo.trim()) {
+                toast.error("📝 답변을 먼저 입력해주세요!");
+                return;
+            }
+
+            const saved = JSON.parse(localStorage.getItem(LS.history) || "[]");
+
+            const separator = "➡️ AI 모범답안:";
+            const userMemoOnly = memo.split(separator)[0].trim();
+            const gptAnswerPart = memo.includes(separator)
+                ? memo.split(separator)[1].trim()
+                : "";
+
+            const reviewForSave = review
+                ? {
+                    score: review.score ?? null,
+                    recommendedLevel: review.recommendedLevel ?? null,
+                    fluency: review.fluency || "",
+                    grammar: review.grammar || "",
+                    vocab: review.vocab || "",
+                    taskAchievement: review.taskAchievement || "",
+                    overallFeedback: review.overallFeedback || "",
+                    userAnswerOriginal: review.userAnswerOriginal || userMemoOnly,
+                    correctedAnswerExample: review.correctedAnswerExample || "",
+                    correctionTips: review.correctionTips || "",
+                }
+                : null;
+
+            const newEntry = {
+                id: Date.now(),
+                createdAt: Date.now(),
+                question,
+                memo: userMemoOnly,
+                gptAnswer: gptAnswerPart,
+                review: reviewForSave,
+            };
+
+            // ✅ 최신 항목을 맨 앞에 넣기 (최신순 유지)
+            const newHistory = [newEntry, ...saved];
+            localStorage.setItem(LS.history, JSON.stringify(newHistory));
+
+            // ✅ “방금 저장한 항목” 단일 상세 모달용 상태
+            setLatestSavedEntry(newEntry);
+            setShowLatestSavedModal(true);
+
+            toast.success("저장되었습니다!");
+        },
+        [memo, question, review]
+    );
+
+    const handleGoToReviewList = useCallback(
+        () => {
+            const raw = JSON.parse(localStorage.getItem(LS.history) || "[]");
+
+            // ✅ createdAt 기준 최신순 정렬
+            const history = raw.slice().sort((a, b) => {
+                const aTime = a.createdAt || 0;
+                const bTime = b.createdAt || 0;
+                return bTime - aTime;
             });
-            const data = await res.json();
-            const answer = (data?.answer || "").trim();
-            if (answer) {
-                setMemo((prev) => `${prev}\n\n\n➡️ AI 모범답안:\n\n${answer}`);
-            } else {
-                toast.error("모범답안 생성 실패");
+
+            if (history.length === 0) {
+                toast.error("저장된 질문이 없습니다.");
+                return;
+            }
+
+            setSavedHistory(history);
+            setUi("review");
+        },
+        [setSavedHistory, setUi]
+    );
+
+    /* --------------------------- 다시 듣기 (정확히 1번) --------------------------- */
+    const handleReplayOnce = useCallback(
+        () => {
+            if (!allowReplayOnce || isFinished) return;
+            const v = videoRef.current;
+            if (!v) return;
+            try {
+                v.currentTime = 0;
+                v.play();
+                setAllowReplayOnce(false);
+            } catch (e) {
+                console.warn("Replay failed", e);
             }
         } finally {
             setLoading(false);
@@ -337,6 +532,16 @@ Prompt: ${question}
                         borderRadius: 16,
                         objectFit: "cover",
                         background: "#000",
+                    }}
+                    onEnded={() => {
+                        if (isFinished) return;
+
+                        if (!hasPlayedOnce) {
+                            setHasPlayedOnce(true);
+                            setTimeLeft(60);
+                            setTimerRunning(true);
+                            setAllowReplayOnce(true);
+                        }
                     }}
                 />
                 <audio ref={audioRef} />
@@ -406,13 +611,14 @@ Prompt: ${question}
 
             {isFinished && (
                 <>
-                    <button onClick={fetchBestAnswerFromGPT}>
-                        <i className="fa-solid fa-wand-magic" aria-hidden="true" /> 모범답안 요청하기
+                    <button onClick={() => handleReview()}>
+                        <i className="fa-solid fa-comments" aria-hidden="true" /> AI 답변 리뷰 보기
                     </button>
                     <button onClick={handleSave}>
                         <i className="fa-solid fa-floppy-disk" aria-hidden="true" /> 질문 + 메모 저장
                     </button>
-                    <button onClick={handleGoToReview}>
+
+                    <button onClick={handleGoToReviewList}>
                         <i className="fa-solid fa-folder-open" aria-hidden="true" /> 저장된 질문/답변 보기
                     </button>
                 </>
@@ -428,6 +634,323 @@ Prompt: ${question}
                     <i className="fa-solid fa-arrow-left icon-nudge" aria-hidden="true" /> 설문 다시하기
                 </button>
             </div>
+
+            {/* 🎯 리뷰 모달 */}
+            {showReviewModal && review && (
+                <div
+                    className="review-overlay"
+                    onClick={() => setShowReviewModal(false)}
+                >
+                    <div
+                        className="question-block"
+                        style={{
+                            maxWidth: 720,
+                            maxHeight: "80vh",
+                            cursor: "auto",
+                            display: "flex",
+                            flexDirection: "column",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="review-header">
+                            <div className="review-header-left">
+                                <i className="fa-solid fa-magnifying-glass-chart" />
+                                <h3>AI 답변 Review</h3>
+                            </div>
+                            <span className="latest-badge">최신</span>
+                            <button
+                                style={{
+                                    marginTop: 0,
+                                    background: "transparent",
+                                    border: "1px solid #94a3b8",
+                                    color: "#475569",
+                                    borderRadius: 8,
+                                    padding: "6px 14px",
+                                    fontSize: 14,
+                                    cursor: "pointer",
+                                }}
+                                onClick={() => setShowReviewModal(false)}
+                            >
+                                ✕ 닫기
+                            </button>
+                        </div>
+
+                        <div
+                            className="review-content"
+                            style={{
+                                marginTop: 16,
+                                overflowY: "auto",
+                                paddingRight: 8,
+                            }}
+                        >
+                            <p>
+                                <strong>점수</strong>: {review.score ?? "-"} / 5{" "}
+                                {review.recommendedLevel &&
+                                    `(${levelLabelMap[review.recommendedLevel] || review.recommendedLevel})`}
+                            </p>
+
+                            {review.fluency && (
+                                <p>
+                                    <strong>유창성</strong>: {review.fluency}
+                                </p>
+                            )}
+                            {review.grammar && (
+                                <p>
+                                    <strong>문법</strong>: {review.grammar}
+                                </p>
+                            )}
+                            {review.vocab && (
+                                <p>
+                                    <strong>어휘</strong>: {review.vocab}
+                                </p>
+                            )}
+                            {review.taskAchievement && (
+                                <p>
+                                    <strong>내용 충실도</strong>: {review.taskAchievement}
+                                </p>
+                            )}
+
+                            {review.overallFeedback && (
+                                <div style={{ marginTop: 16 }}>
+                                    <strong>종합 피드백</strong>
+                                    <p style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                                        {review.overallFeedback}
+                                    </p>
+                                </div>
+                            )}
+
+                            {review.originalAnswer && (
+                                <div
+                                    style={{
+                                        marginTop: 24,
+                                        paddingTop: 16,
+                                        borderTop: "1px solid #eee",
+                                    }}
+                                >
+                                    <strong>📌 내가 한 답변 (원문)</strong>
+                                    <p
+                                        style={{
+                                            marginTop: 8,
+                                            whiteSpace: "pre-wrap",
+                                            lineHeight: 1.6,
+                                        }}
+                                    >
+                                        {review.originalAnswer}
+                                    </p>
+                                </div>
+                            )}
+
+                            {review.correctedAnswer && (
+                                <div style={{ marginTop: 24 }}>
+                                    <strong>✏️ 교정된 영어 답변 예시</strong>
+                                    <p
+                                        style={{
+                                            marginTop: 8,
+                                            whiteSpace: "pre-wrap",
+                                            lineHeight: 1.6,
+                                        }}
+                                    >
+                                        {review.correctedAnswer}
+                                    </p>
+                                </div>
+                            )}
+
+                            {review.correctionTips && (
+                                <div style={{ marginTop: 24 }}>
+                                    <strong>🛠️ 수정하면 좋은 포인트</strong>
+                                    <p
+                                        style={{
+                                            marginTop: 8,
+                                            whiteSpace: "pre-wrap",
+                                            lineHeight: 1.6,
+                                        }}
+                                    >
+                                        {review.correctionTips}
+                                    </p>
+                                </div>
+                            )}
+
+                            {/* 🔹 AI 모범답안 영역 */}
+                            <div
+                                style={{
+                                    marginTop: 24,
+                                    borderTop: "1px solid #eee",
+                                    paddingTop: 16,
+                                }}
+                            >
+                                {!bestAnswer && (
+                                    <button
+                                        className="btn primary"
+                                        onClick={fetchBestAnswerFromGPT}
+                                        style={{ marginTop: 0 }}
+                                        disabled={bestAnswerLoading}
+                                    >
+                                        {bestAnswerLoading ? (
+                                            <>
+                                                <i className="fa-solid fa-spinner fa-spin" /> AI 모범답안 생성 중...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <i className="fa-solid fa-wand-magic" /> AI 모범답안 보기
+                                            </>
+                                        )}
+                                    </button>
+                                )}
+
+                                {bestAnswer && (
+                                    <div style={{ marginTop: 12 }}>
+                                        <div
+                                            style={{
+                                                display: "flex",
+                                                alignItems: "center",
+                                                gap: 8,
+                                            }}
+                                        >
+                                            <i className="fa-solid fa-lightbulb" />
+                                            <strong>AI 모범답안</strong>
+                                        </div>
+                                        <p
+                                            style={{
+                                                marginTop: 8,
+                                                whiteSpace: "pre-wrap",
+                                                lineHeight: 1.6,
+                                            }}
+                                        >
+                                            {bestAnswer}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 🎯 방금 저장한 항목 단일 상세 모달 */}
+            {showLatestSavedModal && latestSavedEntry && (
+                <div
+                    className="review-overlay"
+                    onClick={() => setShowLatestSavedModal(false)}
+                >
+                    <div
+                        className="question-block"
+                        style={{
+                            maxWidth: 720,
+                            maxHeight: "80vh",
+                            cursor: "auto",
+                            display: "flex",
+                            flexDirection: "column",
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="review-header">
+                            <div className="review-header-left">
+                                <i className="fa-solid fa-bookmark" />
+                                <h3>이번에 저장된 질문 / 답변</h3>
+                            </div>
+                            <button
+                                style={{
+                                    marginTop: 0,
+                                    background: "transparent",
+                                    border: "1px solid #94a3b8",
+                                    color: "#475569",
+                                    borderRadius: 8,
+                                    padding: "6px 14px",
+                                    fontSize: 14,
+                                    cursor: "pointer",
+                                }}
+                                onClick={() => setShowLatestSavedModal(false)}
+                            >
+                                ✕ 닫기
+                            </button>
+                        </div>
+
+                        <div
+                            className="review-content"
+                            style={{
+                                marginTop: 16,
+                                overflowY: "auto",
+                                paddingRight: 8,
+                            }}
+                        >
+                            <p>
+                                <strong>질문</strong>
+                            </p>
+                            <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                                {latestSavedEntry.question}
+                            </p>
+
+                            <div style={{ marginTop: 16 }}>
+                                <strong>📝 내가 쓴 답변</strong>
+                                <p style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+                                    {latestSavedEntry.memo || "(메모 없음)"}
+                                </p>
+                            </div>
+
+                            {latestSavedEntry.gptAnswer && (
+                                <div style={{ marginTop: 24 }}>
+                                    <strong>✨ AI 모범답안</strong>
+                                    <p
+                                        style={{ marginTop: 8, whiteSpace: "pre-wrap", lineHeight: 1.6 }}
+                                    >
+                                        {latestSavedEntry.gptAnswer}
+                                    </p>
+                                </div>
+                            )}
+
+                            {latestSavedEntry.review && (
+                                <div
+                                    style={{
+                                        marginTop: 24,
+                                        paddingTop: 16,
+                                        borderTop: "1px solid #e5e7eb",
+                                    }}
+                                >
+                                    <strong>📊 저장된 리뷰 요약</strong>
+                                    <p style={{ marginTop: 8 }}>
+                                        점수: {latestSavedEntry.review.score ?? "-"} / 5{" "}
+                                        {latestSavedEntry.review.recommendedLevel &&
+                                            `(${levelLabelMap[latestSavedEntry.review.recommendedLevel] ||
+                                            latestSavedEntry.review.recommendedLevel
+                                            })`}
+                                    </p>
+                                    {latestSavedEntry.review.overallFeedback && (
+                                        <p
+                                            style={{
+                                                marginTop: 4,
+                                                whiteSpace: "pre-wrap",
+                                                lineHeight: 1.6,
+                                            }}
+                                        >
+                                            {latestSavedEntry.review.overallFeedback}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+
+                            <div
+                                style={{
+                                    marginTop: 24,
+                                    display: "flex",
+                                    gap: 12,
+                                    flexWrap: "wrap",
+                                }}
+                            >
+                                <button
+                                    className="btn primary"
+                                    style={{ marginTop: 0 }}
+                                    onClick={() => {
+                                        setShowLatestSavedModal(false);
+                                        handleGoToReviewList(); // 전체 저장본 페이지로 이동
+                                    }}
+                                >
+                                    <i className="fa-solid fa-list" /> 전체 저장본 보기
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
